@@ -4,11 +4,16 @@ from openai import OpenAI
 import os
 import json
 from datetime import datetime
+from supabase import create_client
 
 app = Flask(__name__)
 client = OpenAI()
 
-STATE_FILE = os.path.join(os.path.dirname(__file__), "conversation_state.json")
+STATE_FILE = os.path.join(os.path.dirname(__file__), "conversation_state.json")  # local fallback only
+
+SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip()
+SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY) if SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY else None
 
 BASE_DIR = os.path.dirname(os.path.dirname(__file__))
 KNOWLEDGE_FILE = os.path.join(BASE_DIR, "knowledge_base", "sales_agent_knowledge.md")
@@ -127,6 +132,7 @@ Better:
 """
 
 def load_state():
+    # Local fallback only. Production memory should use Supabase.
     if not os.path.exists(STATE_FILE):
         return {}
     try:
@@ -136,8 +142,56 @@ def load_state():
         return {}
 
 def save_state(state):
+    # Local fallback only. Production memory should use Supabase.
     with open(STATE_FILE, "w", encoding="utf-8") as f:
         json.dump(state, f, indent=2)
+
+def load_conversation(sender):
+    if supabase:
+        try:
+            result = (
+                supabase.table("sales_agent_conversations")
+                .select("messages")
+                .eq("sender", sender)
+                .limit(1)
+                .execute()
+            )
+            if result.data:
+                messages = result.data[0].get("messages") or []
+                return {"messages": messages}
+            return {"messages": []}
+        except Exception as e:
+            print(f"Supabase load error: {e}")
+
+    state = load_state()
+    return state.get(sender, {"messages": []})
+
+def save_conversation(sender, convo):
+    messages = convo.get("messages", [])
+
+    # Keep database rows compact. This still gives the agent recent context,
+    # while preserving enough conversation history for useful continuity.
+    max_saved_messages = int(os.getenv("ELS_MEMORY_MAX_MESSAGES", "40"))
+    if len(messages) > max_saved_messages:
+        messages = messages[-max_saved_messages:]
+        convo["messages"] = messages
+
+    if supabase:
+        try:
+            payload = {
+                "sender": sender,
+                "messages": messages,
+                "last_message_at": datetime.utcnow().isoformat(),
+                "updated_at": datetime.utcnow().isoformat(),
+            }
+            supabase.table("sales_agent_conversations").upsert(payload, on_conflict="sender").execute()
+            return
+        except Exception as e:
+            print(f"Supabase save error: {e}")
+
+    # Fallback if Supabase is not configured or temporarily fails.
+    state = load_state()
+    save_conversation(sender, convo)
 
 def build_history_text(messages):
     recent = messages[-8:]
@@ -173,8 +227,7 @@ def whatsapp_reply():
 
     print(f"Message from {sender}: {incoming_msg}")
 
-    state = load_state()
-    convo = state.get(sender, {"messages": []})
+    convo = load_conversation(sender)
 
     convo["messages"].append({
         "role": "lead",
@@ -226,8 +279,7 @@ If the answer requires information not available in the knowledge base, give a h
         "time": datetime.now().isoformat()
     })
 
-    state[sender] = convo
-    save_state(state)
+    save_conversation(sender, convo)
 
     resp = MessagingResponse()
     msg = resp.message()
