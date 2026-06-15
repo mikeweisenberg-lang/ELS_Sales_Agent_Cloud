@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+conversation_state.json
+whatsapp/conversation_state.json
+*.log
