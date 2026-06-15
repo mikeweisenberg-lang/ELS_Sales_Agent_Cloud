@@ -191,7 +191,8 @@ def save_conversation(sender, convo):
 
     # Fallback if Supabase is not configured or temporarily fails.
     state = load_state()
-    save_conversation(sender, convo)
+    state[sender] = convo
+    save_state(state)
 
 def build_history_text(messages):
     recent = messages[-8:]
