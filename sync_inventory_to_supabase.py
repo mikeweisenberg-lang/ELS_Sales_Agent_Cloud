@@ -88,8 +88,12 @@ def map_room(room):
 
         "price": to_int(acf.get("discount_price") or acf.get("price")),
 
-        "available_from": None,
-        "available_status": None,
+        "available_from": acf.get("availability_month") or acf.get("availability_month_2") or None,
+        "available_status": (
+            "available"
+            if str(acf.get("is_available") or acf.get("is_available_2") or "").strip() == "1"
+            else "not_available"
+        ),
 
         "beds": to_int(acf.get("bed")),
         "bathrooms": to_int(acf.get("bathroom")),
